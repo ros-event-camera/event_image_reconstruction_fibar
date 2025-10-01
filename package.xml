@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>event_image_reconstruction_fibar</name>
+  <version>1.0.0</version>
+  <description>ROS package for synchronized image reconstruction from event frames</description>
+  <maintainer email="bernd.pfrommer@eventvisionresearch.com">Bernd Pfrommer</maintainer>
+  <license>Apache2</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_ros</buildtool_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+
+  <depend>cv_bridge</depend>
+  <depend>event_camera_codecs</depend>  
+  <depend>event_camera_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <depend>rclcpp</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>simple_image_recon_lib</depend>
+  
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+
+</package>
