@@ -47,10 +47,11 @@ public:
   using EventPacket = EventPacketT;
   explicit ApproxReconstructor(
     FrameHandler<ImageConstPtrT> * fh, const std::string & topic,
-    int cutoffNumEvents = 30, double fillRatio = 0.5,
+    int cutoffNumEvents = 30, double fillRatio = 0.5, bool activePixels = false,
     const std::string & scaleFile = std::string())
   : frameHandler_(fh),
     topic_(topic),
+    activePixels_(activePixels),
     scaleFile_(scaleFile),
     cutoffNumEvents_(cutoffNumEvents),
     fillRatio_(fillRatio)
@@ -186,16 +187,18 @@ private:
       msg->data.resize(msg->height * msg->step);
       simpleReconstructor_.getImage(&(msg->data[0]), msg->step);
       msg->header.stamp = frameTime.rosTime;
-      auto activeMsg = std::make_unique<ImageT>(imageMsgTemplate_);
-      activeMsg->data.resize(activeMsg->height * activeMsg->step);
-      simpleReconstructor_.getActivePixelImage(
-        &(activeMsg->data[0]), activeMsg->step);
-      const double fr = simpleReconstructor_.getCurrentFillRatio();
-      const size_t qs = simpleReconstructor_.getCurrentQueueSize();
-      activeMsg->header.stamp = frameTime.rosTime;
       frameHandler_->frame(frameTime.sensorTime, std::move(msg), topic_);
-      frameHandler_->activePixels(
-        frameTime.sensorTime, std::move(activeMsg), topic_, qs, fr);
+      if (activePixels_) {
+        auto activeMsg = std::make_unique<ImageT>(imageMsgTemplate_);
+        activeMsg->data.resize(activeMsg->height * activeMsg->step);
+        simpleReconstructor_.getActivePixelImage(
+          &(activeMsg->data[0]), activeMsg->step);
+        const double fr = simpleReconstructor_.getCurrentFillRatio();
+        const size_t qs = simpleReconstructor_.getCurrentQueueSize();
+        activeMsg->header.stamp = frameTime.rosTime;
+        frameHandler_->activePixels(
+          frameTime.sensorTime, std::move(activeMsg), topic_, qs, fr);
+      }
       frameTimes_.pop();
     }
   }
@@ -203,6 +206,7 @@ private:
   // ------------------------  variables ------------------------------
   FrameHandler<ImageConstPtrT> * frameHandler_{nullptr};
   std::string topic_;
+  bool activePixels_;
   std::string scaleFile_;
   ImageT imageMsgTemplate_;
   int cutoffNumEvents_{0};

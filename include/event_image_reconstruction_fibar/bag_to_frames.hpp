@@ -380,7 +380,7 @@ struct BagToFrames
     const std::vector<std::string> & outTopics,
     const std::vector<std::string> & frameTopics, int cutoffPeriod,
     double fillRatio, bool hasSyncCable, double fps, bool writePNG,
-    const std::string & scaleFile = std::string())
+    bool activePixels = false, const std::string & scaleFile = std::string())
   {
     rosbag2_cpp::Reader reader;
     reader.open(inBagName);
@@ -397,9 +397,9 @@ struct BagToFrames
     std::unordered_map<std::string, ApproxRecon> recons;
     for (size_t i = 0; i < inTopics.size(); i++) {
       recons.insert(
-        {inTopics[i],
-         ApproxRecon(
-           &writer, outTopics[i], cutoffPeriod, fillRatio, scaleFile)});
+        {inTopics[i], ApproxRecon(
+                        &writer, outTopics[i], cutoffPeriod, fillRatio,
+                        activePixels, scaleFile)});
     }
 
     size_t numMessages(0);

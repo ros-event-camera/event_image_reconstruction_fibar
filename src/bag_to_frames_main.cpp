@@ -50,9 +50,13 @@ int main(int argc, char ** argv)
   bool hasSyncCable{false};
   double fps(-1);
   bool writePNG{false};
+  bool activePixels{false};
   int tileSize(2);
-  while ((opt = getopt(argc, argv, "i:o:t:T:f:C:c:x:r:S:y:shp")) != -1) {
+  while ((opt = getopt(argc, argv, "i:o:t:T:f:C:c:x:r:S:y:ashp")) != -1) {
     switch (opt) {
+      case 'a':
+        activePixels = true;
+        break;
       case 'i':
         inBagName = optarg;
         break;
@@ -157,21 +161,21 @@ int main(int argc, char ** argv)
         event_image_reconstruction_fibar::BagToFrames<2>::process_bag(
           inBagName, outBagName, timeStampFile, inTopics, outTopics,
           frameTopics, cutoffPeriod, fillRatio, hasSyncCable, fps, writePNG,
-          scaleFile);
+          activePixels, scaleFile);
       break;
     case 3:
       numMessages =
         event_image_reconstruction_fibar::BagToFrames<3>::process_bag(
           inBagName, outBagName, timeStampFile, inTopics, outTopics,
           frameTopics, cutoffPeriod, fillRatio, hasSyncCable, fps, writePNG,
-          scaleFile);
+          activePixels, scaleFile);
       break;
     case 4:
       numMessages =
         event_image_reconstruction_fibar::BagToFrames<4>::process_bag(
           inBagName, outBagName, timeStampFile, inTopics, outTopics,
           frameTopics, cutoffPeriod, fillRatio, hasSyncCable, fps, writePNG,
-          scaleFile);
+          activePixels, scaleFile);
       break;
     default:
       std::cerr << "tile size not implemented!" << std::endl;
