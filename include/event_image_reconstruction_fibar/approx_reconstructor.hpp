@@ -19,15 +19,14 @@
 #include <event_camera_codecs/decoder_factory.h>
 #include <event_camera_codecs/event_processor.h>
 
+#include <event_image_reconstruction_fibar/check_endian.hpp>
+#include <event_image_reconstruction_fibar/frame_handler.hpp>
+#include <event_image_reconstruction_fibar/ros_compat.hpp>
+#include <event_image_reconstruction_fibar/time_offset.hpp>
+#include <fibar_lib/image_reconstructor.hpp>
 #include <memory>
 #include <queue>
-#include <simple_image_recon_lib/simple_image_reconstructor.hpp>
 #include <string>
-
-#include "event_image_reconstruction_fibar/check_endian.hpp"
-#include "event_image_reconstruction_fibar/frame_handler.hpp"
-#include "event_image_reconstruction_fibar/ros_compat.hpp"
-#include "event_image_reconstruction_fibar/time_offset.hpp"
 
 namespace event_image_reconstruction_fibar
 {
@@ -39,33 +38,33 @@ class ApproxReconstructor : public event_camera_codecs::EventProcessor
 public:
   struct FrameTime
   {
-    FrameTime(uint64_t s, const RosTimeT & r) : sensorTime(s), rosTime(r) {}
-    uint64_t sensorTime{0};
-    RosTimeT rosTime;
+    FrameTime(uint64_t s, const RosTimeT & r) : sensor_time(s), ros_time(r) {}
+    uint64_t sensor_time{0};
+    RosTimeT ros_time;
   };
 
   using EventPacket = EventPacketT;
   explicit ApproxReconstructor(
     FrameHandler<ImageConstPtrT> * fh, const std::string & topic,
-    int cutoffNumEvents = 30, double fillRatio = 0.5, bool activePixels = false,
-    const std::string & scaleFile = std::string())
-  : frameHandler_(fh),
+    int cutoff_num_events = 30, double fill_ratio = 0.5,
+    bool active_pixels = false, const std::string & scale_file = std::string())
+  : frame_handler_(fh),
     topic_(topic),
-    activePixels_(activePixels),
-    scaleFile_(scaleFile),
-    cutoffNumEvents_(cutoffNumEvents),
-    fillRatio_(fillRatio)
+    active_pixels_(active_pixels),
+    scale_file_(scale_file),
+    cutoff_num_events_(cutoff_num_events),
+    fill_ratio_(fill_ratio)
   {
-    imageMsgTemplate_.height = 0;
+    image_msg_template_.height = 0;
   }
 
   // ---------- inherited from EventProcessor
   inline void eventCD(
     uint64_t t, uint16_t ex, uint16_t ey, uint8_t polarity) override
   {
-    numberOfEvents_++;
-    if (__builtin_expect(updateROStoSensorTimeOffset_, false)) {
-      const auto & msg = bufferedMessages_.front();
+    number_of_events_++;
+    if (__builtin_expect(update_ros_to_sensor_time_offset_, false)) {
+      const auto & msg = buffered_messages_.front();
       updateROSTimeOffset(
         ros_compat::to_nanoseconds(RosTimeT(msg->header.stamp)), t);
     }
@@ -76,44 +75,44 @@ public:
     (void)ey;
     (void)polarity;
 #else
-    simpleReconstructor_.event(t, ex, ey, polarity);
+    reconstructor_.event(t, ex, ey, polarity);
 #endif
   }
-  void eventExtTrigger(uint64_t, uint8_t, uint8_t) override {}
+  bool eventExtTrigger(uint64_t, uint8_t, uint8_t) override { return (true); }
   void finished() override {}
   void rawData(const char *, size_t) override {}
   // --------- end of inherited from EventProcessor
 
-  const auto & getDecodeTime() const { return decodeTime_; }
-  const auto & getNumberOfEvents() const { return numberOfEvents_; }
+  const auto & getDecodeTime() const { return decode_time_; }
+  const auto & getNumberOfEvents() const { return number_of_events_; }
 
-  void addFrameTime(uint64_t sensorTime, const RosTimeT t)
+  void addFrameTime(uint64_t sensor_time, const RosTimeT t)
   {
     // if there is no sync cable between the event cameras,
     // compute the sensor time from ros time and offset
     const uint64_t st =
-      syncOnSensorTime_
-        ? sensorTime
-        : (ros_compat::to_nanoseconds(t) - timeOffset_.getOffset());
-    frameTimes_.push(FrameTime(st, t));
+      sync_on_sensor_time_
+        ? sensor_time
+        : (ros_compat::to_nanoseconds(t) - time_offset_.getOffset());
+    frame_times_.push(FrameTime(st, t));
     process();
   }
 
   // Set this to true if the event cams are hw synced to each other.
-  void setSyncOnSensorTime(bool s) { syncOnSensorTime_ = s; }
+  void setSyncOnSensorTime(bool s) { sync_on_sensor_time_ = s; }
   void processMsg(EventPacketConstSharedPtrT msg)
   {
-    if (imageMsgTemplate_.height == 0) {
-      imageMsgTemplate_.header = msg->header;
-      imageMsgTemplate_.width = msg->width;
-      imageMsgTemplate_.height = msg->height;
-      imageMsgTemplate_.encoding = "mono8";
-      imageMsgTemplate_.is_bigendian = check_endian::isBigEndian();
-      imageMsgTemplate_.step = imageMsgTemplate_.width;
-      simpleReconstructor_.initialize(
+    if (image_msg_template_.height == 0) {
+      image_msg_template_.header = msg->header;
+      image_msg_template_.width = msg->width;
+      image_msg_template_.height = msg->height;
+      image_msg_template_.encoding = "mono8";
+      image_msg_template_.is_bigendian = check_endian::isBigEndian();
+      image_msg_template_.step = image_msg_template_.width;
+      reconstructor_.initialize(
         msg->width, msg->height,
-        static_cast<uint32_t>(std::abs(cutoffNumEvents_)), fillRatio_);
-      decoder_ = decoderFactory_.getInstance(*msg);
+        static_cast<uint32_t>(std::abs(cutoff_num_events_)), fill_ratio_);
+      decoder_ = decoder_factory_.getInstance(*msg);
       if (!decoder_) {
         std::cerr << "invalid encoding: " << msg->encoding << std::endl;
         throw(std::runtime_error("invalid encoding!"));
@@ -122,108 +121,107 @@ public:
       if (scaleFile_.empty()) {
         std::cerr << "WARNING: NO SCALE FILE PROVIDED!" << std::endl;
       } else {
-        simpleReconstructor_.readScaleFile(scaleFile_);
+        reconstructor_.readScaleFile(scaleFile_);
       }
 #endif
       auto decoder =
         event_camera_codecs::DecoderFactory<EventPacketT>().getInstance(*msg);
-      uint64_t firstTS{0};
-      bool foundTime = decoder->findFirstSensorTime(*msg, &firstTS);
-      if (!foundTime) {
+      uint64_t first_ts{0};
+      bool found_time = decoder->findFirstSensorTime(*msg, &first_ts);
+      if (!found_time) {
         std::cout << "WARNING: first message does not contain time stamp!"
                   << std::endl;
       } else {
         updateROSTimeOffset(
-          ros_compat::to_nanoseconds(RosTimeT(msg->header.stamp)), firstTS);
+          ros_compat::to_nanoseconds(RosTimeT(msg->header.stamp)), first_ts);
       }
     }
-    bufferedMessages_.push(msg);
+    buffered_messages_.push(msg);
     process();
   }
 
   void process()
   {
-    while (!bufferedMessages_.empty() && !frameTimes_.empty()) {
-      auto msg = bufferedMessages_.front();
+    while (!buffered_messages_.empty() && !frame_times_.empty()) {
+      auto msg = buffered_messages_.front();
       // this loop will run until the message is completely decoded or
       // the last frame is used up
-      uint64_t nextTime{0};
-      bool messageExhausted(false);
-      while (!frameTimes_.empty() && !messageExhausted) {
+      uint64_t next_time{0};
+      bool message_exhausted(false);
+      while (!frame_times_.empty() && !message_exhausted) {
         const auto t0 = std::chrono::high_resolution_clock::now();
-        messageExhausted = !decoder_->decodeUntil(
-          *msg, this, frameTimes_.front().sensorTime, &nextTime);
-        decodeTime_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::high_resolution_clock::now() - t0)
-                         .count();
-        emitFramesOlderThan(nextTime);
+        message_exhausted = !decoder_->decodeUntil(
+          *msg, this, frame_times_.front().sensor_time, &next_time);
+        decode_time_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::high_resolution_clock::now() - t0)
+                          .count();
+        emitFramesOlderThan(next_time);
       }
 
-      if (messageExhausted) {
-        bufferedMessages_.pop();
+      if (message_exhausted) {
+        buffered_messages_.pop();
       }
     }
   }
 
-  bool hasValidSensorTimeOffset() const { return (timeOffset_.isValid()); }
+  bool hasValidSensorTimeOffset() const { return (time_offset_.isValid()); }
 
   // returns  t_ros - t_sensor in nanoseconds
-  int64_t getSensorTimeOffset() const { return (timeOffset_.getOffset()); }
+  int64_t getSensorTimeOffset() const { return (time_offset_.getOffset()); }
 
   void updateROSTimeOffset(uint64_t tros, uint64_t tsens)
   {
-    timeOffset_.update(tros, tsens);
-    updateROStoSensorTimeOffset_ =
+    time_offset_.update(tros, tsens);
+    update_ros_to_sensor_time_offset_ =
       false;  // only update on first event after stamp
   }
 
 private:
-  void emitFramesOlderThan(uint64_t currentTime)
+  void emitFramesOlderThan(uint64_t current_time)
   {
-    while (!frameTimes_.empty() &&
-           frameTimes_.front().sensorTime <= currentTime) {
-      const auto & frameTime = frameTimes_.front();
-      auto msg = std::make_unique<ImageT>(imageMsgTemplate_);
+    while (!frame_times_.empty() &&
+           frame_times_.front().sensor_time <= current_time) {
+      const auto & frame_time = frame_times_.front();
+      auto msg = std::make_unique<ImageT>(image_msg_template_);
       msg->data.resize(msg->height * msg->step);
-      simpleReconstructor_.getImage(&(msg->data[0]), msg->step);
-      msg->header.stamp = frameTime.rosTime;
-      frameHandler_->frame(frameTime.sensorTime, std::move(msg), topic_);
-      if (activePixels_) {
-        auto activeMsg = std::make_unique<ImageT>(imageMsgTemplate_);
-        activeMsg->data.resize(activeMsg->height * activeMsg->step);
-        simpleReconstructor_.getActivePixelImage(
-          &(activeMsg->data[0]), activeMsg->step);
-        const double fr = simpleReconstructor_.getCurrentFillRatio();
-        const size_t qs = simpleReconstructor_.getCurrentQueueSize();
-        activeMsg->header.stamp = frameTime.rosTime;
-        frameHandler_->activePixels(
-          frameTime.sensorTime, std::move(activeMsg), topic_, qs, fr);
+      reconstructor_.getImage(&(msg->data[0]), msg->step);
+      msg->header.stamp = frame_time.ros_time;
+      frame_handler_->frame(frame_time.sensor_time, std::move(msg), topic_);
+      if (active_pixels_) {
+        auto active_msg = std::make_unique<ImageT>(image_msg_template_);
+        active_msg->data.resize(active_msg->height * active_msg->step);
+        reconstructor_.getActivePixelImage(
+          &(active_msg->data[0]), active_msg->step);
+        const double fr = reconstructor_.getCurrentFillRatio();
+        const size_t qs = reconstructor_.getCurrentQueueSize();
+        active_msg->header.stamp = frame_time.ros_time;
+        frame_handler_->activePixels(
+          frame_time.sensor_time, std::move(active_msg), topic_, qs, fr);
       }
-      frameTimes_.pop();
+      frame_times_.pop();
     }
   }
 
   // ------------------------  variables ------------------------------
-  FrameHandler<ImageConstPtrT> * frameHandler_{nullptr};
+  FrameHandler<ImageConstPtrT> * frame_handler_{nullptr};
   std::string topic_;
-  bool activePixels_;
-  std::string scaleFile_;
-  ImageT imageMsgTemplate_;
-  int cutoffNumEvents_{0};
-  double fillRatio_{0};
-  TimeOffset timeOffset_;
-  bool updateROStoSensorTimeOffset_{true};
-  bool syncOnSensorTime_{false};
+  bool active_pixels_;
+  std::string scale_file_;
+  ImageT image_msg_template_;
+  int cutoff_num_events_{0};
+  double fill_ratio_{0};
+  TimeOffset time_offset_;
+  bool update_ros_to_sensor_time_offset_{true};
+  bool sync_on_sensor_time_{false};
   event_camera_codecs::Decoder<EventPacket, ApproxReconstructor> * decoder_{
     nullptr};
   event_camera_codecs::DecoderFactory<EventPacket, ApproxReconstructor>
-    decoderFactory_;
-  simple_image_recon_lib::SimpleImageReconstructor<tile_size>
-    simpleReconstructor_;
-  std::queue<FrameTime> frameTimes_;
-  std::queue<EventPacketConstSharedPtrT> bufferedMessages_;
-  uint64_t decodeTime_{0};
-  uint64_t numberOfEvents_{0};
+    decoder_factory_;
+  fibar_lib::ImageReconstructor<tile_size> reconstructor_;
+  std::queue<FrameTime> frame_times_;
+  std::queue<EventPacketConstSharedPtrT> buffered_messages_;
+  uint64_t decode_time_{0};
+  uint64_t number_of_events_{0};
 };
 }  // namespace event_image_reconstruction_fibar
 #endif  // EVENT_IMAGE_RECONSTRUCTION_FIBAR__APPROX_RECONSTRUCTOR_HPP_

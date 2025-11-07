@@ -17,22 +17,60 @@ cmake_minimum_required(VERSION 3.16)
 project(event_image_reconstruction_fibar)
 
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)
-
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_ros REQUIRED)
-find_package(simple_image_recon_lib REQUIRED)
-
-find_package(rclcpp REQUIRED)
+find_package(cv_bridge REQUIRED)
 find_package(event_camera_msgs REQUIRED)
 find_package(event_camera_codecs REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(rosbag2_cpp REQUIRED)
-find_package(cv_bridge REQUIRED)
+find_package(fibar_lib REQUIRED)
+find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
 # add_definitions(-DRESCALE)
+if(${rosbag2_cpp_VERSION} VERSION_GREATER_EQUAL "0.26.0")
+  add_definitions(-DUSE_NEW_ROSBAG_WRITE_INTERFACE)
+endif()
+if(${image_transport_VERSION} VERSION_GREATER_EQUAL "6.3.0")
+  add_definitions(-DIMAGE_TRANSPORT_USE_QOS)
+endif()
+if(${image_transport_VERSION} VERSION_GREATER_EQUAL "6.4.0")
+  add_definitions(-DIMAGE_TRANSPORT_USE_NODEINTERFACE)
+endif()
+
+add_library(fibar
+  src/fibar.cpp)
+
+target_link_libraries(fibar
+  cv_bridge::cv_bridge
+  ${event_camera_codecs_TARGETS}
+  ${event_camera_msgs_TARGETS}
+  fibar_lib::fibar_lib
+  image_transport::image_transport
+  opencv_core
+  opencv_imgcodecs
+  rclcpp::rclcpp
+  rclcpp_components::component
+  rosbag2_cpp::rosbag2_cpp
+  ${sensor_msgs_TARGETS})
+
+# target_compile_options(fibar PRIVATE -fsanitize=address)
+# target_link_options(fibar PRIVATE -fsanitize=address)
+
+target_include_directories(fibar PUBLIC include)
+rclcpp_components_register_nodes(fibar "event_image_reconstruction_fibar::Fibar")
+
+#
+# -------- fibar node
+#
+add_executable(fibar_node src/fibar_node.cpp)
+target_link_libraries(fibar_node PUBLIC fibar rclcpp::rclcpp)
+target_include_directories(fibar_node PRIVATE include)
 
 #
 # -------- bag_to_frames
@@ -47,19 +85,25 @@ target_link_libraries(bag_to_frames
   rclcpp::rclcpp
   rosbag2_cpp::rosbag2_cpp
   ${sensor_msgs_TARGETS}
-  simple_image_recon_lib::simple_image_recon_lib
+  fibar_lib::fibar_lib
   opencv_core opencv_imgcodecs)
-
-if(${rosbag2_cpp_VERSION} VERSION_GREATER_EQUAL "0.26.0")
-  add_definitions(-DUSE_NEW_ROSBAG_WRITE_INTERFACE)
-endif()
 
 # the nodes must go into the paroject specific lib directory or else
 # the launch file will not find it
 
 install(TARGETS
+  fibar_node
   bag_to_frames
   DESTINATION lib/${PROJECT_NAME}/)
+
+install(TARGETS
+    fibar
+    DESTINATION lib)
+
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}/
+  FILES_MATCHING PATTERN "*.py")
 
 if(BUILD_TESTING)
   find_package(ament_cmake REQUIRED)
@@ -67,18 +111,16 @@ if(BUILD_TESTING)
   find_package(ament_cmake_cppcheck REQUIRED)
   find_package(ament_cmake_cpplint REQUIRED)
   find_package(ament_cmake_clang_format REQUIRED)
-  find_package(ament_cmake_flake8 REQUIRED)
+  find_package(ament_cmake_black REQUIRED)
   find_package(ament_cmake_lint_cmake REQUIRED)
-  find_package(ament_cmake_pep257 REQUIRED)
   find_package(ament_cmake_xmllint REQUIRED)
 
   ament_copyright()
   ament_cppcheck(LANGUAGE c++)
   ament_cpplint(FILTERS "-build/include,-runtime/indentation_namespace")
   ament_clang_format(CONFIG_FILE .clang-format)
-  ament_flake8()
+  ament_black()
   ament_lint_cmake()
-  ament_pep257()
   ament_xmllint()
 endif()
 
