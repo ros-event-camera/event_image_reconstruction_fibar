@@ -138,11 +138,7 @@ public:
     auto smsg = std::make_shared<rclcpp::SerializedMessage>();
     rclcpp::Serialization<MsgT> serialization;
     serialization.serialize_message(m.get(), smsg.get());
-#ifdef USE_NEW_ROSBAG_WRITE_INTERFACE
     writer_->write(smsg, topic, topicType, rclcpp::Time(m->header.stamp));
-#else
-    writer_->write(*smsg, topic, topicType, rclcpp::Time(m->header.stamp));
-#endif
   }
 
 private:
