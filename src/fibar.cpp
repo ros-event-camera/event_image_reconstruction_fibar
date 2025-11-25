@@ -35,56 +35,72 @@ Fibar::Fibar(const rclcpp::NodeOptions & options)
                .automatically_declare_parameters_from_overrides(true))
 {
   img_msg_template_.height = 0;
-#ifdef IMAGE_TRANSPORT_USE_QOS
-  const auto qosProf = rclcpp::SystemDefaultsQoS();
-#else
-  const auto qosProf = rmw_qos_profile_default;
-#endif
+  configure();
+  activate();
+}
 
-  image_pub_ = image_transport::create_publisher(
-#ifdef IMAGE_TRANSPORT_USE_NODEINTERFACE
-    *this,
-#else
-    this,
-#endif
-    "~/image_raw", qosProf);
+Fibar::~Fibar()
+{
+  deactivate();
+  deconfigure();
+}
+
+void Fibar::configure()
+{
   this->get_parameter_or("cutoff_num_events", cutoff_num_events_, 40);
-  double fps;
-  this->get_parameter_or("fps", fps, -1.0);
-  time_slice_ = (fps <= 0.0) ? -1.0 : (1.0 / fps);
-  // Poll since the ROS2 image transport does not yet call back when subscribers come and go.
-  subscription_check_timer_ = rclcpp::create_timer(
-    this, get_clock(), rclcpp::Duration(1, 0),
-    std::bind(&Fibar::subscriptionCheckTimerExpired, this));
-  if (time_slice_ >= 0) {
+  this->get_parameter_or("use_trigger_events", use_trigger_events_, false);
+  this->get_parameter_or<std::string>("sync_mode", sync_mode_, "free_running");
+  RCLCPP_INFO_STREAM(get_logger(), "sync mode: " << sync_mode_);
+  this->get_parameter_or<bool>(
+    "publish_time_reference", publish_time_reference_, false);
+  if (sync_mode_ == "free_running") {
+    double fps;
+    this->get_parameter_or("fps", fps, -1.0);
+    if (fps <= 0.0) {
+      RCLCPP_ERROR(get_logger(), "no valid frame rate specified!");
+      throw std::runtime_error("no valid frame rate specified!");
+    }
+    if (use_trigger_events_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "free running sync mode does not use trigger events, ignoring "
+        "use_trigger_events=true");
+      use_trigger_events_ = false;
+    }
+    time_slice_ = 1.0 / fps;
     RCLCPP_INFO_STREAM(
       get_logger(), "in free running mode with frame rate " << fps << " Hz");
+  } else if (sync_mode_ == "trigger_events") {
+    if (!use_trigger_events_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "trigger_events mode requires use_trigger_events=true, enabling it!");
+    }
+    use_trigger_events_ = true;
+    trigger_generates_frames_ = true;
+  } else if (sync_mode_ == "camera_image") {
+    RCLCPP_INFO(get_logger(), "synchronizing to camera images");
+  } else if (sync_mode_ == "time_reference") {
+    RCLCPP_INFO(get_logger(), "synchronizing to time reference");
   } else {
-    RCLCPP_INFO_STREAM(
-      get_logger(), "driving frame times from topic "
-                      << this->get_node_topics_interface()->resolve_topic_name(
-                           "~/frame_image"));
+    RCLCPP_ERROR_STREAM(get_logger(), "unknown sync mode: " << sync_mode_);
+    throw std::runtime_error("unknown sync mode: " + sync_mode_);
   }
+
+  if (use_trigger_events_) {
+    std::string edge;
+    this->get_parameter_or<std::string>("trigger_edge", edge, "up");
+    trigger_events_edge_ = (edge == "up" || edge == "UP") ? 1 : 0;
+    RCLCPP_INFO_STREAM(
+      get_logger(),
+      "using trigger events: " << (use_trigger_events_ ? edge : "NONE"));
+  } else {
+    RCLCPP_INFO_STREAM(get_logger(), "not using trigger events!");
+  }
+
   this->get_parameter_or("statistics_period", statistics_period_, 5.0);
-  last_statistics_time_ = this->now();
-  statistics_timer_ = rclcpp::create_timer(
-    this, get_clock(), rclcpp::Duration::from_seconds(statistics_period_),
-    std::bind(&Fibar::statisticsTimerExpired, this));
   this->get_parameter_or(
     "event_queue_memory_limit", event_queue_memory_limit_, 10 * 1024 * 1024);
-  this->get_parameter_or("use_trigger_events", use_trigger_events_, false);
-  std::string edge;
-  this->get_parameter_or<std::string>("trigger_edge", edge, "up");
-  trigger_events_edge_ = (edge == "up" || edge == "UP") ? 1 : 0;
-  if (use_trigger_events_ && time_slice_ > 0) {
-    RCLCPP_WARN(
-      get_logger(),
-      "cannot use trigger events in free running mode, disabling triggers!");
-    use_trigger_events_ = false;
-  }
-  RCLCPP_INFO_STREAM(
-    get_logger(),
-    "using trigger events: " << (use_trigger_events_ ? edge : "NONE"));
   this->get_parameter_or<std::string>("frame_path", frame_path_, "");
   if (!frame_path_.empty()) {
     // Create the directory (and any necessary parent directories)
@@ -102,7 +118,47 @@ Fibar::Fibar(const rclcpp::NodeOptions & options)
   }
 }
 
-Fibar::~Fibar()
+void Fibar::activate()
+{
+  rclcpp::PublisherOptions pub_options;
+#ifdef USE_MATCHED_EVENTS
+  pub_options.event_callbacks.matched_callback =
+    std::bind(&Fibar::subscriberChangedCallback, this, std::placeholders::_1);
+#endif
+
+#ifdef IMAGE_TRANSPORT_USE_QOS
+  const auto qosProf = rclcpp::SystemDefaultsQoS();
+#else
+  const auto qosProf = rmw_qos_profile_default;
+#endif
+  image_pub_ = image_transport::create_publisher(
+#ifdef IMAGE_TRANSPORT_USE_NODEINTERFACE
+    *this,
+#else
+    this,
+#endif
+    "~/image_raw", qosProf, pub_options);
+  if (publish_time_reference_) {
+    RCLCPP_INFO_STREAM(
+      get_logger(), "publishing time reference on topic "
+                      << this->get_node_topics_interface()->resolve_topic_name(
+                           "~/time_reference"));
+    time_reference_pub_ = this->create_publisher<TimeReference>(
+      "~/time_reference", rclcpp::SystemDefaultsQoS(), pub_options);
+  }
+
+#ifndef USE_MATCHED_EVENTS
+  subscription_check_timer_ = rclcpp::create_timer(
+    this, get_clock(), rclcpp::Duration(1, 0),
+    std::bind(&Fibar::subscriptionCheckTimerExpired, this));
+#endif
+  last_statistics_time_ = this->now();
+  statistics_timer_ = rclcpp::create_timer(
+    this, get_clock(), rclcpp::Duration::from_seconds(statistics_period_),
+    std::bind(&Fibar::statisticsTimerExpired, this));
+}
+
+void Fibar::deactivate()
 {
   if (statistics_timer_) {
     statistics_timer_->cancel();
@@ -113,18 +169,37 @@ Fibar::~Fibar()
   if (subscription_check_timer_) {
     subscription_check_timer_->cancel();
   }
-  if (image_sub_) {
-    image_sub_.reset();
-  }
+  // stop receiving frames
+  image_sub_.reset();
+  time_ref_sub_.reset();
 }
 
-void Fibar::subscriptionCheckTimerExpired()
+void Fibar::deconfigure()
 {
-  // this silly dance is only necessary because ROS2 at this time does not support
-  // callbacks when subscribers come and go
-  if (image_pub_.getNumSubscribers()) {
+  // done already in deactivate(), but for good measure...
+  image_sub_.reset();
+  time_ref_sub_.reset();
+  // this one was not deactivated before
+  time_reference_pub_.reset();
+}
+
+void Fibar::subscriberChangedCallback(rclcpp::MatchedInfo &)
+{
+  checkSubscriptions();
+}
+
+void Fibar::subscriptionCheckTimerExpired() { checkSubscriptions(); }
+
+void Fibar::checkSubscriptions()
+{
+  if (
+    image_pub_.getNumSubscribers() ||
+    (time_reference_pub_ && time_reference_pub_->get_subscription_count())) {
     if (!event_sub_) {
-      RCLCPP_INFO(this->get_logger(), "subscribing to events!");
+      RCLCPP_INFO_STREAM(
+        this->get_logger(),
+        "subscribing to event "
+          << this->get_node_topics_interface()->resolve_topic_name("~/events"));
       const int qsize = 1000;
       const auto qos = rclcpp::QoS(rclcpp::KeepLast(qsize))
                          .best_effort()
@@ -132,35 +207,63 @@ void Fibar::subscriptionCheckTimerExpired()
       event_sub_ = this->create_subscription<EventPacket>(
         "~/events", qos,
         std::bind(&Fibar::eventMsg, this, std::placeholders::_1));
-    }
-    if (time_slice_ > 0) {
-      if (!frame_timer_) {
-        frame_timer_ = rclcpp::create_timer(
-          this, get_clock(), rclcpp::Duration::from_seconds(time_slice_),
-          std::bind(&Fibar::frameTimerExpired, this));
-      }
-    } else if (!image_sub_) {
-      image_sub_ = this->create_subscription<Image>(
-        "~/frame_image", rclcpp::SystemDefaultsQoS(),
-        std::bind(&Fibar::imageMsg, this, std::placeholders::_1));
-      RCLCPP_INFO_STREAM(get_logger(), "subscribed to image topic for frames!");
+      startFrameStreaming();
     }
   } else {
     // -------------- no subscribers -------------------
     if (event_sub_) {
       RCLCPP_INFO(this->get_logger(), "unsubscribing from events!");
       event_sub_.reset();
+      stopFrameStreaming();
     }
-    if (frame_timer_) {
-      // if nobody is listening, stop publishing frames if this is currently happening
-      frame_timer_->cancel();
-      frame_timer_.reset();
+  }
+}
+
+void Fibar::startFrameStreaming()
+{
+  if (sync_mode_ == "free_running") {
+    if (!frame_timer_) {
+      frame_timer_ = rclcpp::create_timer(
+        this, get_clock(), rclcpp::Duration::from_seconds(time_slice_),
+        std::bind(&Fibar::frameTimerExpired, this));
     }
-    if (image_sub_) {
-      image_sub_.reset();
-      RCLCPP_INFO(
-        this->get_logger(), "unsubscribed from image topic for frames!");
-    }
+  } else if (sync_mode_ == "camera_image") {
+    image_sub_ = this->create_subscription<Image>(
+      "~/frame_image", rclcpp::SystemDefaultsQoS(),
+      std::bind(&Fibar::imageMsg, this, std::placeholders::_1));
+    RCLCPP_INFO_STREAM(
+      this->get_logger(),
+      "subscribing to camera images topic "
+        << this->get_node_topics_interface()->resolve_topic_name(
+             "~/frame_image"));
+  } else if (sync_mode_ == "time_reference") {
+    time_ref_sub_ = this->create_subscription<TimeReference>(
+      "~/time_reference", rclcpp::SystemDefaultsQoS(),
+      std::bind(&Fibar::timeReferenceMsg, this, std::placeholders::_1));
+    RCLCPP_INFO_STREAM(
+      this->get_logger(),
+      "subscribing to time ref topic "
+        << this->get_node_topics_interface()->resolve_topic_name(
+             "~/time_reference"));
+  }
+}
+
+void Fibar::stopFrameStreaming()
+{
+  if (frame_timer_) {
+    // if nobody is listening, stop publishing frames if this is currently happening
+    frame_timer_->cancel();
+    frame_timer_.reset();
+  }
+  if (image_sub_) {
+    image_sub_.reset();
+    RCLCPP_INFO(
+      this->get_logger(), "unsubscribed from image topic for frames!");
+  }
+  if (time_ref_sub_) {
+    time_ref_sub_.reset();
+    RCLCPP_INFO(
+      this->get_logger(), "unsubscribed from time_reference topic for frames!");
   }
 }
 
@@ -184,15 +287,15 @@ void Fibar::handleFirstMessage(const EventPacket::ConstSharedPtr & msg)
     decoder_ = decoder_factory_.getInstance(*msg);
   }
   // create temporary decoder to find the correspondence between
-  // ros time and sensor time
+  // host time and sensor time
   auto tmp_decoder = decoder_factory_.newInstance(*msg);
   uint64_t sensor_time{0};
   if (tmp_decoder->findFirstSensorTime(*msg, &sensor_time)) {
     RCLCPP_INFO_STREAM(
-      get_logger(), "initializing: ROS time "
+      get_logger(), "init: host time "
                       << rclcpp::Time(msg->header.stamp).nanoseconds()
-                      << " corresponds to sensor time: " << sensor_time);
-    updateRosToSensorTimeOffset(
+                      << " <=> sensor time: " << sensor_time);
+    updateHostToSensorTimeOffset(
       rclcpp::Time(msg->header.stamp), static_cast<int64_t>(sensor_time));
   }
 }
@@ -231,6 +334,14 @@ bool Fibar::eventExtTrigger(uint64_t t, uint8_t edge, uint8_t)
   }
   num_trigger_events_++;
   trigger_period_.update(t);
+  if (trigger_generates_frames_) {
+    const FrameTime ft(sensorToHostTime(t), t);
+    publishTimeReference(ft);
+    publishFrame(ft.host_time);
+    return (true);
+  }
+  // look through list of frame times and pick the one that
+  // is closest to the trigger time
   emitFramesForTrigger(t);
   // keep going if there are still frames to be processed
   return (!frames_.empty());
@@ -286,7 +397,7 @@ void Fibar::emitFramesForTrigger(uint64_t t_sensor_trigger)
       const int64_t delay = static_cast<int64_t>(frame.sensor_time) -
                             static_cast<int64_t>(t_sensor_trigger);
       frame_delay_ = frame_delay_ * 0.9 + static_cast<double>(delay) * 0.1;
-      publishFrame(frame.ros_time);
+      publishFrame(frame.host_time);
       frames_.pop_front();
     } else {
       RCLCPP_WARN_STREAM(
@@ -296,17 +407,35 @@ void Fibar::emitFramesForTrigger(uint64_t t_sensor_trigger)
   }
 }
 
+void Fibar::processEventMessagesWithTriggersOnly()
+{
+  while (!event_msg_queue_.empty()) {
+    const auto & msg = event_msg_queue_.front();
+    header_time_ = rclcpp::Time(msg->header.stamp);
+    // stay in this loop until either all frames are used up,
+    // or the event message is completely decoded
+    while (decoder_->decode(*msg, this)) {
+      // the eventExtTrigger() called during decode() will publish the frames
+    }
+    event_queue_memory_ -= msg->events.size();
+    event_msg_queue_.pop();
+    is_first_time_in_packet_ = true;  // for next event message
+  }
+}
+
 void Fibar::processEventMessagesWithTriggers()
 {
   // Note that this will not process event messages unless
-  // there are frames avaiable. This
+  // there are frames avaiable. This means that if frames
+  // are lagging behind events, the events will sit in the queue
+  // until frames are requested.
   while (!event_msg_queue_.empty() && !frames_.empty()) {
     const auto & msg = event_msg_queue_.front();
-    ros_header_time_ = rclcpp::Time(msg->header.stamp);
+    header_time_ = rclcpp::Time(msg->header.stamp);
     // stay in this loop until either all frames are used up,
     // or the event message is completely decoded
     while (!frames_.empty() && decoder_->decode(*msg, this)) {
-      // the extTriggerEvent() called during decode() will publish the frames
+      // the eventExtTrigger() called during decode() will publish the frames
     }
     if (!frames_.empty()) {  // means the message has been completely decoded
       event_queue_memory_ -= msg->events.size();
@@ -316,19 +445,15 @@ void Fibar::processEventMessagesWithTriggers()
   }
 }
 
-void Fibar::processEventMessages()
+void Fibar::processEventMessagesWithoutTriggers()
 {
-  if (use_trigger_events_) {
-    processEventMessagesWithTriggers();
-    return;
-  }
   if (t0_ == std::numeric_limits<int64_t>::lowest()) {
     return;
   }
   auto & frames = frames_;
   while (!event_msg_queue_.empty() && !frames.empty()) {
     const auto & msg = event_msg_queue_.front();
-    ros_header_time_ = rclcpp::Time(msg->header.stamp);
+    header_time_ = rclcpp::Time(msg->header.stamp);
     while (!frames.empty()) {
       const uint64_t time_limit = frames.front().sensor_time;
       uint64_t next_time = 0;
@@ -341,10 +466,22 @@ void Fibar::processEventMessages()
         break;
       }
       while (!frames.empty() && frames.front().sensor_time <= next_time) {
-        publishFrame(frames.front().ros_time);
+        publishFrame(frames.front().host_time);
         frames.pop_front();
       }
     }
+  }
+}
+void Fibar::processEventMessages()
+{
+  if (use_trigger_events_) {
+    if (trigger_generates_frames_) {
+      processEventMessagesWithTriggersOnly();
+    } else {
+      processEventMessagesWithTriggers();
+    }
+  } else {
+    processEventMessagesWithoutTriggers();
   }
 }
 
@@ -371,22 +508,34 @@ void Fibar::publishFrame(const rclcpp::Time & t)
   }
 }
 
-void Fibar::updateRosToSensorTimeOffset(
-  const rclcpp::Time & t_ros, int64_t t_sens)
+void Fibar::updateHostToSensorTimeOffset(
+  const rclcpp::Time & t_host, int64_t t_sens)
 {
   if (t0_ == std::numeric_limits<int64_t>::lowest()) {
-    t0_ = static_cast<int64_t>(t_ros.nanoseconds()) - t_sens;
+    t0_ = static_cast<int64_t>(t_host.nanoseconds()) - t_sens;
     t0_init_ = t0_;
   } else {
     // to avoid rounding errors, first subtract off the large t0_init_,
     // which contains the time since epoch.
     const double dt_meas = static_cast<double>(
-      static_cast<int64_t>(t_ros.nanoseconds()) - t0_init_ -
+      static_cast<int64_t>(t_host.nanoseconds()) - t0_init_ -
       t_sens);  // measured
     const double dt_k =
       static_cast<double>(t0_ - t0_init_);  // current estimate
     constexpr double alpha = 1.0 / 100.0;
     t0_ = t0_init_ + static_cast<int64_t>(dt_k * (1 - alpha) + dt_meas * alpha);
+  }
+}
+
+void Fibar::publishTimeReference(const FrameTime & ft)
+{
+  if (
+    time_reference_pub_ && time_reference_pub_->get_subscription_count() > 0) {
+    time_reference_pub_->publish(
+      TimeReference()
+        .set__header(std_msgs::msg::Header().set__stamp(ft.host_time))
+        .set__time_ref(rclcpp::Time(ft.sensor_time, RCL_ROS_TIME))
+        .set__source(this->get_name()));
   }
 }
 
@@ -400,7 +549,6 @@ void Fibar::addNewFrame(const FrameTime & ft)
   } else {
     frames_.push_back(ft);
   }
-  processEventMessages();
 }
 
 void Fibar::PeriodEstimator::update(uint64_t t)
@@ -432,7 +580,10 @@ void Fibar::frameTimerExpired()
       "no event messages received yet, cannot produce frames!");
     return;
   }
-  addNewFrame(FrameTime(t, rosToSensorTime(t)));
+  const FrameTime ft(t, hostToSensorTime(t));
+  addNewFrame(ft);
+  publishTimeReference(ft);
+  processEventMessages();
 }
 
 void Fibar::imageMsg(const Image::ConstSharedPtr msg)
@@ -445,13 +596,33 @@ void Fibar::imageMsg(const Image::ConstSharedPtr msg)
     return;
   }
   const rclcpp::Time t(msg->header.stamp);
-  addNewFrame(FrameTime(t, rosToSensorTime(t)));
+  const FrameTime ft(t, hostToSensorTime(t));
+  addNewFrame(ft);
+  publishTimeReference(ft);
+  processEventMessages();
+
   if (!frame_path_.empty()) {
     const std::string filename =
       frame_path_ + "/frame_" + std::to_string(t.nanoseconds()) + ".png";
     const cv_bridge::CvImageConstPtr cv_img = cv_bridge::toCvShare(msg);
     cv::imwrite(filename, cv_img->image);
   }
+}
+
+void Fibar::timeReferenceMsg(const TimeReference::ConstSharedPtr msg)
+{
+  frame_period_.update(rclcpp::Time(msg->header.stamp).nanoseconds());
+  if (t0_ == std::numeric_limits<int64_t>::lowest()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "no event messages received yet, cannot produce frames!");
+    return;
+  }
+  const rclcpp::Time t(msg->header.stamp);
+  const FrameTime ft(t, hostToSensorTime(t));
+  addNewFrame(ft);
+  publishTimeReference(ft);
+  processEventMessages();
 }
 
 void Fibar::statisticsTimerExpired()
@@ -467,12 +638,20 @@ void Fibar::statisticsTimerExpired()
   const double fr_rate = static_cast<double>(num_frames_generated_) / dt;
   const double fr_est = frame_period_.getRate();
   const double tr_rate = num_trigger_events_ / dt;
+  const char * fmt_str =
+    "%s%6.2f Mevs, frame: %6.2f(est: %6.2f)Hz trig: %6.2f(est: %6.2f)Hz "
+    "delay: %6.3f ms";
+
   const double tr_est = trigger_period_.getRate();
-  RCLCPP_INFO(
-    get_logger(),
-    "%6.2f Mevs, frame: %6.2f(est: %6.2f)Hz trig: %6.2f(est: %6.2f)Hz delay: "
-    "%6.3f ms",
-    ev_rate * 1e-6, fr_rate, fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
+  if (image_pub_.getNumSubscribers() > 0) {
+    RCLCPP_INFO(
+      get_logger(), fmt_str, "", ev_rate * 1e-6, fr_rate, fr_est, tr_rate,
+      tr_est, frame_delay_ * 1e-6);
+  } else {
+    RCLCPP_WARN(
+      get_logger(), fmt_str, "NO SUBSCRIBERS! ", ev_rate * 1e-6, fr_rate,
+      fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
+  }
   num_events_processed_ = 0;
   num_frames_generated_ = 0;
   num_trigger_events_ = 0;
@@ -480,7 +659,7 @@ void Fibar::statisticsTimerExpired()
 }
 std::ostream & operator<<(std::ostream & os, const Fibar::FrameTime & ft)
 {
-  os << "ros: " << ft.ros_time.nanoseconds() * 1e-9
+  os << "hsot: " << ft.host_time.nanoseconds() * 1e-9
      << " sensor: " << ft.sensor_time;
   return (os);
 }
