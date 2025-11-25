@@ -28,6 +28,7 @@
 #include <queue>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/time_reference.hpp>
 #include <string>
 
 namespace event_image_reconstruction_fibar
@@ -37,6 +38,7 @@ class Fibar : public rclcpp::Node, public event_camera_codecs::EventProcessor
 public:
   using EventPacket = event_camera_msgs::msg::EventPacket;
   using Image = sensor_msgs::msg::Image;
+  using TimeReference = sensor_msgs::msg::TimeReference;
   explicit Fibar(const rclcpp::NodeOptions & options);
   ~Fibar();
 
@@ -60,11 +62,11 @@ public:
 private:
   struct FrameTime
   {
-    explicit FrameTime(rclcpp::Time rt, uint64_t st)
-    : ros_time(rt), sensor_time(st)
+    explicit FrameTime(rclcpp::Time ht, uint64_t st)
+    : host_time(ht), sensor_time(st)
     {
     }
-    rclcpp::Time ros_time;
+    rclcpp::Time host_time;
     uint64_t sensor_time{0};
   };
   friend std::ostream & operator<<(
@@ -87,19 +89,19 @@ private:
     double est_period_{-1.0};
   };
 
-  inline uint64_t rosToSensorTime(const rclcpp::Time & t) const
+  inline uint64_t hostToSensorTime(const rclcpp::Time & t) const
   {
     return (t.nanoseconds() - t0_);
   }
-  inline rclcpp::Time sensorToRosTime(uint64_t t) const
+  inline rclcpp::Time sensorToHostTime(uint64_t t) const
   {
     return (rclcpp::Time(t + t0_, RCL_ROS_TIME));
   }
   inline void updateFirstSensorTime(uint64_t sensor_time)
   {
     if (is_first_time_in_packet_) {
-      updateRosToSensorTimeOffset(
-        ros_header_time_, static_cast<int64_t>(sensor_time));
+      updateHostToSensorTimeOffset(
+        header_time_, static_cast<int64_t>(sensor_time));
       is_first_time_in_packet_ = false;
     }
   }
@@ -108,21 +110,39 @@ private:
   void statisticsTimerExpired();
   void eventMsg(EventPacket::ConstSharedPtr msg);
   void imageMsg(const Image::ConstSharedPtr msg);
+  void timeReferenceMsg(const TimeReference::ConstSharedPtr msg);
+#ifdef USE_MATCHED_EVENTS
+  void subscriberChangedCallback(rclcpp::MatchedInfo & info);
+#endif
+  void checkSubscriptions();
+  void processEventMessagesWithTriggersOnly();
+  void processEventMessagesWithTriggers();
+  void processEventMessagesWithoutTriggers();
   void processEventMessages();
-  void updateRosToSensorTimeOffset(const rclcpp::Time & t_ros, int64_t tsens);
+  void updateHostToSensorTimeOffset(
+    const rclcpp::Time & t_host, int64_t t_sens);
   void handleFirstMessage(const EventPacket::ConstSharedPtr & msg);
   void publishFrame(const rclcpp::Time & t);
+  void publishTimeReference(const FrameTime & ft);
   void addNewFrame(const FrameTime & ft);
   void emitFramesForTrigger(uint64_t t_sensor_trigger);
-  void processEventMessagesWithTriggers();
+  void startFrameStreaming();
+  void stopFrameStreaming();
+  void configure();
+  void activate();
+  void deconfigure();
+  void deactivate();
   // ------------------------  variables ------------------------------
   rclcpp::TimerBase::SharedPtr frame_timer_;
   rclcpp::TimerBase::SharedPtr subscription_check_timer_;
   rclcpp::TimerBase::SharedPtr statistics_timer_;
-  double time_slice_{-1};  // duration of one frame
   rclcpp::Subscription<EventPacket>::SharedPtr event_sub_;
   rclcpp::Subscription<Image>::SharedPtr image_sub_;
+  rclcpp::Subscription<TimeReference>::SharedPtr time_ref_sub_;
+  rclcpp::Publisher<TimeReference>::SharedPtr time_reference_pub_;
   image_transport::Publisher image_pub_;
+  std::string sync_mode_{"free_running"};
+  double time_slice_{-1};  // duration of one frame
   Image img_msg_template_;
   std::string encoding_;             // currently used incoming message encoding
   size_t event_queue_memory_{0};     // currently used event queue memory
@@ -130,16 +150,18 @@ private:
   std::queue<EventPacket::ConstSharedPtr> event_msg_queue_;
   std::deque<FrameTime> frames_;
   int64_t t0_{
-    std::numeric_limits<int64_t>::lowest()};  // ros to sensor time offset
+    std::numeric_limits<int64_t>::lowest()};  // host to sensor time offset
   int64_t t0_init_{0};
   event_camera_codecs::Decoder<EventPacket, Fibar> * decoder_{nullptr};
   event_camera_codecs::DecoderFactory<EventPacket, Fibar> decoder_factory_;
-  rclcpp::Time ros_header_time_;
+  rclcpp::Time header_time_;
   bool is_first_time_in_packet_{true};
   fibar_lib::ImageReconstructor<2> reconstructor_;
   int cutoff_num_events_{40};
   size_t num_trigger_events_ = 0;
+  bool publish_time_reference_{false};
   bool use_trigger_events_{false};
+  bool trigger_generates_frames_{false};
   uint8_t trigger_events_edge_{0};
   double statistics_period_{5.0};
   size_t num_events_processed_{0};

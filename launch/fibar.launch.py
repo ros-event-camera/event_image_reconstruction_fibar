@@ -44,14 +44,15 @@ def launch_setup(context, *args, **kwargs):
                     {
                         "fps": PythonExpression(["float(", LaunchConfig("fps"), ")"]),
                         "use_trigger_events": LaunchConfig("use_trigger_events"),
-                        "trigger_edge": LaunchConfig("edge"),
+                        "trigger_edge": LaunchConfig("trigger_edge"),
                         "frame_path": LaunchConfig("frame_path"),
+                        "sync_mode": LaunchConfig("sync_mode"),
                         "use_sim_time": LaunchConfig("use_sim_time"),
                     }
                 ],
                 remappings=[
                     ("~/events", LaunchConfig("event_topic")),
-                    ("~/frame_image", LaunchConfig("frame_camera_topic")),
+                    ("~/frame_image", LaunchConfig("frame_image")),
                 ],
                 extra_arguments=[{"use_intra_process_comms": True}],
             )
@@ -82,12 +83,12 @@ def generate_launch_description():
                 description="if trigger events should be used",
             ),
             LaunchArg(
-                "edge",
+                "trigger_edge",
                 default_value="up",
                 description="use up or down edge of trigger signal",
             ),
             LaunchArg(
-                "frame_camera_topic",
+                "frame_image",
                 default_value="/cam_sync/cam0/image_raw",  # modify as needed
                 description="topic of frame camera images to sync to",
             ),
@@ -100,6 +101,11 @@ def generate_launch_description():
                 "frame_path",
                 default_value="",  # no frames written by default
                 description="output file path for frames",
+            ),
+            LaunchArg(
+                "sync_mode",
+                default_value="free_running",
+                description="synchronization mode (free_running, trigger_events, camera_image, time_reference)",
             ),
             OpaqueFunction(function=launch_setup),
         ]
