@@ -39,6 +39,9 @@ endif()
 if(${image_transport_VERSION} VERSION_GREATER_EQUAL "6.4.0")
   add_definitions(-DIMAGE_TRANSPORT_USE_NODEINTERFACE)
 endif()
+if(${rclcpp_VERSION} VERSION_GREATER_EQUAL "28.0.0")
+  add_definitions(-DUSE_MATCHED_EVENTS)
+endif()
 
 add_library(fibar
   src/fibar.cpp)
