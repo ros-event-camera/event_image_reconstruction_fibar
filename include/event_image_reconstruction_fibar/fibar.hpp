@@ -164,6 +164,8 @@ private:
   double statistics_period_{5.0};
   size_t num_events_processed_{0};
   size_t num_frames_generated_{0};
+  int64_t lag_sum_{0};
+  size_t lag_num_{0};
   rclcpp::Time last_statistics_time_;
   PeriodEstimator frame_period_;
   PeriodEstimator trigger_period_;

@@ -506,6 +506,8 @@ void Fibar::publishFrame(const rclcpp::Time & t)
   if (image_pub_.getNumSubscribers() != 0) {
     image_pub_.publish(std::move(msg));
   }
+  lag_sum_ += (this->get_clock()->now() - t).nanoseconds();
+  lag_num_++;
 }
 
 void Fibar::updateHostToSensorTimeOffset(
@@ -638,23 +640,28 @@ void Fibar::statisticsTimerExpired()
   const double fr_rate = static_cast<double>(num_frames_generated_) / dt;
   const double fr_est = frame_period_.getRate();
   const double tr_rate = num_trigger_events_ / dt;
+  const double lag = lag_num_ > 0 ? static_cast<double>(lag_sum_) /
+                                      static_cast<double>(lag_num_) * 1e-9
+                                  : 0.0;
   const char * fmt_str =
-    "%s%6.2f Mevs, frame: %6.2f(est: %6.2f)Hz trig: %6.2f(est: %6.2f)Hz "
-    "delay: %6.3f ms";
+    "%s%6.2f Mevs, lag: %7.4fs frm: %6.2f(%6.2f)Hz trig: %6.2f(%6.2f)Hz "
+    "del: %6.3fms";
 
   const double tr_est = trigger_period_.getRate();
   if (image_pub_.getNumSubscribers() > 0) {
     RCLCPP_INFO(
-      get_logger(), fmt_str, "", ev_rate * 1e-6, fr_rate, fr_est, tr_rate,
+      get_logger(), fmt_str, "", ev_rate * 1e-6, lag, fr_rate, fr_est, tr_rate,
       tr_est, frame_delay_ * 1e-6);
   } else {
     RCLCPP_WARN(
-      get_logger(), fmt_str, "NO SUBSCRIBERS! ", ev_rate * 1e-6, fr_rate,
+      get_logger(), fmt_str, "NO SUBSCRIBERS! ", lag, ev_rate * 1e-6, fr_rate,
       fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
   }
   num_events_processed_ = 0;
   num_frames_generated_ = 0;
   num_trigger_events_ = 0;
+  lag_sum_ = 0;
+  lag_num_ = 0;
   last_statistics_time_ = now;
 }
 std::ostream & operator<<(std::ostream & os, const Fibar::FrameTime & ft)
