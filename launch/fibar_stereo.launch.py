@@ -61,7 +61,7 @@ def launch_setup(context, *args, **kwargs):
         name="fibar_container",
         namespace="",
         package="rclcpp_components",
-        executable="component_container",
+        executable="component_container_isolated",
         # prefix=["xterm -e gdb -ex run --args"],
         composable_node_descriptions=nodes,
         output="screen",
