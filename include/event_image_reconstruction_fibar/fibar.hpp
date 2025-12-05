@@ -47,7 +47,11 @@ public:
     uint64_t sensor_time, uint16_t ex, uint16_t ey, uint8_t polarity) override
   {
     num_events_processed_++;
-    reconstructor_.event(sensor_time, ex, ey, polarity);
+    if (use_spatial_filter_) {
+      reconstructor_with_filter_.event(sensor_time, ex, ey, polarity);
+    } else {
+      reconstructor_no_filter_.event(sensor_time, ex, ey, polarity);
+    }
     updateFirstSensorTime(sensor_time);
   }
 
@@ -154,7 +158,9 @@ private:
   event_camera_codecs::DecoderFactory<EventPacket, Fibar> decoder_factory_;
   rclcpp::Time header_time_;
   bool is_first_time_in_packet_{true};
-  fibar_lib::ImageReconstructor<2> reconstructor_;
+  fibar_lib::ImageReconstructor<true, 2> reconstructor_with_filter_;
+  fibar_lib::ImageReconstructor<false, 2> reconstructor_no_filter_;
+  bool use_spatial_filter_{true};
   int cutoff_num_events_{40};
   size_t num_trigger_events_ = 0;
   bool publish_time_reference_{false};
@@ -167,6 +173,7 @@ private:
   int64_t lag_sum_{0};
   size_t lag_num_{0};
   rclcpp::Time last_statistics_time_;
+  rclcpp::Time last_statistics_w_;  // wall time
   PeriodEstimator frame_period_;
   PeriodEstimator trigger_period_;
   double frame_delay_{0.0};
