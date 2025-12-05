@@ -53,6 +53,7 @@ void Fibar::configure()
   RCLCPP_INFO_STREAM(get_logger(), "sync mode: " << sync_mode_);
   this->get_parameter_or<bool>(
     "publish_time_reference", publish_time_reference_, false);
+  this->get_parameter_or<bool>("use_spatial_filter", use_spatial_filter_, true);
   if (sync_mode_ == "free_running") {
     double fps;
     this->get_parameter_or("fps", fps, -1.0);
@@ -137,7 +138,7 @@ void Fibar::activate()
 #else
     this,
 #endif
-    "~/image_raw", qosProf, pub_options);
+    "~/image", qosProf, pub_options);
   if (publish_time_reference_) {
     RCLCPP_INFO_STREAM(
       get_logger(), "publishing time reference on topic "
@@ -153,6 +154,7 @@ void Fibar::activate()
     std::bind(&Fibar::subscriptionCheckTimerExpired, this));
 #endif
   last_statistics_time_ = this->now();
+  last_statistics_w_ = rclcpp::Clock(RCL_SYSTEM_TIME).now();
   statistics_timer_ = rclcpp::create_timer(
     this, get_clock(), rclcpp::Duration::from_seconds(statistics_period_),
     std::bind(&Fibar::statisticsTimerExpired, this));
@@ -196,11 +198,13 @@ void Fibar::checkSubscriptions()
     image_pub_.getNumSubscribers() ||
     (time_reference_pub_ && time_reference_pub_->get_subscription_count())) {
     if (!event_sub_) {
+      int qsize = 1000;
+      this->get_parameter_or("ros_event_queue_size", qsize, 1000);
       RCLCPP_INFO_STREAM(
         this->get_logger(),
         "subscribing to event "
-          << this->get_node_topics_interface()->resolve_topic_name("~/events"));
-      const int qsize = 1000;
+          << this->get_node_topics_interface()->resolve_topic_name("~/events")
+          << " qsize: " << qsize);
       const auto qos = rclcpp::QoS(rclcpp::KeepLast(qsize))
                          .best_effort()
                          .durability_volatile();
@@ -281,9 +285,15 @@ void Fibar::handleFirstMessage(const EventPacket::ConstSharedPtr & msg)
       get_logger(), "initializing reconstructor for sensor size "
                       << msg->width << " x " << msg->height
                       << " encoding: " << encoding_);
-    reconstructor_.initialize(
-      msg->width, msg->height,
-      static_cast<uint32_t>(std::abs(cutoff_num_events_)), 0.5);
+    if (use_spatial_filter_) {
+      reconstructor_with_filter_.initialize(
+        msg->width, msg->height,
+        static_cast<uint32_t>(std::abs(cutoff_num_events_)), 0.5);
+    } else {
+      reconstructor_no_filter_.initialize(
+        msg->width, msg->height,
+        static_cast<uint32_t>(std::abs(cutoff_num_events_)));
+    }
     decoder_ = decoder_factory_.getInstance(*msg);
   }
   // create temporary decoder to find the correspondence between
@@ -394,8 +404,9 @@ void Fibar::emitFramesForTrigger(uint64_t t_sensor_trigger)
       // in handling the frames.
       // Irrespective of that, the published frame has the header stamp of the
       // frame camera image such that it's clear which frames belong together.
-      const int64_t delay = static_cast<int64_t>(frame.sensor_time) -
-                            static_cast<int64_t>(t_sensor_trigger);
+      const int64_t delay = static_cast<int64_t>(t_sensor_trigger) -
+                            static_cast<int64_t>(frame.sensor_time);
+
       frame_delay_ = frame_delay_ * 0.9 + static_cast<double>(delay) * 0.1;
       publishFrame(frame.host_time);
       frames_.pop_front();
@@ -457,9 +468,10 @@ void Fibar::processEventMessagesWithoutTriggers()
     while (!frames.empty()) {
       const uint64_t time_limit = frames.front().sensor_time;
       uint64_t next_time = 0;
-      if (!decoder_->decodeUntil(*msg, this, time_limit, &next_time)) {
-        // event message was completely decoded. Cannot emit frame yet
-        // because more events may arrive that are before the frame time
+      const bool completely_decoded =
+        !decoder_->decodeUntil(*msg, this, time_limit, &next_time);
+      if (completely_decoded) {
+        // Cannot emit frame yet b/c more events may arrive that are before the frame time
         event_queue_memory_ -= msg->events.size();
         event_msg_queue_.pop();
         is_first_time_in_packet_ = true;  // for next event message
@@ -493,7 +505,11 @@ void Fibar::publishFrame(const rclcpp::Time & t)
     image_pub_.getNumSubscribers() != 0 || !frame_path_.empty();
   if (need_img) {
     msg->data.resize(msg->step * msg->height);
-    reconstructor_.getImage(msg->data.data(), msg->step);
+    if (use_spatial_filter_) {
+      reconstructor_with_filter_.getImage(msg->data.data(), msg->step);
+    } else {
+      reconstructor_no_filter_.getImage(msg->data.data(), msg->step);
+    }
   }
   // must first write to disk before invalidating the msg with std::move
   if (!frame_path_.empty()) {
@@ -643,19 +659,24 @@ void Fibar::statisticsTimerExpired()
   const double lag = lag_num_ > 0 ? static_cast<double>(lag_sum_) /
                                       static_cast<double>(lag_num_) * 1e-9
                                   : 0.0;
+  const rclcpp::Time now_w = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  const double dt_wall = std::max((now_w - last_statistics_w_).seconds(), 1e-6);
+  const double ev_rate_w = static_cast<double>(num_events_processed_) / dt_wall;
+
   const char * fmt_str =
-    "%s%6.2f Mevs, lag: %7.4fs frm: %6.2f(%6.2f)Hz trig: %6.2f(%6.2f)Hz "
+    "%s%6.2f(%6.2f) Mevs, lag: %7.4fs frm: %6.2f(%6.2f)Hz trig: "
+    "%6.2f(%6.2f)Hz "
     "del: %6.3fms";
 
   const double tr_est = trigger_period_.getRate();
   if (image_pub_.getNumSubscribers() > 0) {
     RCLCPP_INFO(
-      get_logger(), fmt_str, "", ev_rate * 1e-6, lag, fr_rate, fr_est, tr_rate,
-      tr_est, frame_delay_ * 1e-6);
+      get_logger(), fmt_str, "", ev_rate * 1e-6, ev_rate_w * 1e-6, lag, fr_rate,
+      fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
   } else {
     RCLCPP_WARN(
-      get_logger(), fmt_str, "NO SUBSCRIBERS! ", lag, ev_rate * 1e-6, fr_rate,
-      fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
+      get_logger(), fmt_str, "NO SUBSCRIBERS! ", lag, ev_rate * 1e-6,
+      ev_rate_w * 1e-6, fr_rate, fr_est, tr_rate, tr_est, frame_delay_ * 1e-6);
   }
   num_events_processed_ = 0;
   num_frames_generated_ = 0;
@@ -663,10 +684,11 @@ void Fibar::statisticsTimerExpired()
   lag_sum_ = 0;
   lag_num_ = 0;
   last_statistics_time_ = now;
+  last_statistics_w_ = now_w;
 }
 std::ostream & operator<<(std::ostream & os, const Fibar::FrameTime & ft)
 {
-  os << "hsot: " << ft.host_time.nanoseconds() * 1e-9
+  os << "host: " << ft.host_time.nanoseconds() * 1e-9
      << " sensor: " << ft.sensor_time;
   return (os);
 }
