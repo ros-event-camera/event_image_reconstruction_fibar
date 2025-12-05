@@ -13,12 +13,13 @@
   <depend>cv_bridge</depend>
   <depend>event_camera_codecs</depend>  
   <depend>event_camera_msgs</depend>
+  <depend>fibar_lib</depend>
   <depend>libopencv-dev</depend>
   <depend>rclcpp</depend>
   <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_transport</depend>
   <depend>sensor_msgs</depend>
-  <depend>fibar_lib</depend>
-  
+    
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_black</test_depend>
