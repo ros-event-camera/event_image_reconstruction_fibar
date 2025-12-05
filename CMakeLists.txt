@@ -29,6 +29,7 @@ find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_transport REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -73,6 +74,17 @@ target_link_libraries(fibar_node PUBLIC fibar rclcpp::rclcpp)
 target_include_directories(fibar_node PRIVATE include)
 
 #
+# -------- performance test
+#
+add_executable(performance_test src/performance_test.cpp)
+target_include_directories(performance_test PUBLIC include)
+target_link_libraries(performance_test
+  fibar
+  rclcpp::rclcpp
+  rosbag2_transport::rosbag2_transport
+  ${sensor_msgs_TARGETS})
+
+#
 # -------- bag_to_frames
 #
 add_executable(bag_to_frames src/bag_to_frames_main.cpp)
@@ -94,6 +106,7 @@ target_link_libraries(bag_to_frames
 install(TARGETS
   fibar_node
   bag_to_frames
+  performance_test
   DESTINATION lib/${PROJECT_NAME}/)
 
 install(TARGETS
