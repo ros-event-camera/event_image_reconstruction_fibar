@@ -115,7 +115,9 @@ private:
   void eventMsg(EventPacket::ConstSharedPtr msg);
   void imageMsg(const Image::ConstSharedPtr msg);
   void timeReferenceMsg(const TimeReference::ConstSharedPtr msg);
+#ifdef USE_MATCHED_EVENTS
   void subscriberChangedCallback(rclcpp::MatchedInfo & info);
+#endif
   void checkSubscriptions();
   void processEventMessagesWithTriggersOnly();
   void processEventMessagesWithTriggers();

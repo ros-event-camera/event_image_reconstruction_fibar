@@ -5,6 +5,8 @@ means of a temporal and spatial filtering algorithm
 [described here](https://arxiv.org/abs/2510.20071). It depends
 on the [fibar library](https://github.com/ros-event-camera/fibar_lib).
 
+![stereo apriltags](images/stereo_apriltags.png)
+
 ## Supported platforms
 
 Continuous integration testing for ROS Humble and later distros.
@@ -75,9 +77,11 @@ Supported synchronization modes:
   See [Synchronization Modes](#synchronization-modes) and the sync table below. Default: False.
 - ``fps``: Frequency (in hz) at which images are reconstructed in free running mode. Default: 25.
 - ``cutoff_num_events``: The cutoff period (in number of events) for the reconstruction algorithm.
-  See [the FIBAR paper](https://arxiv.org/abs/2510.20071).Default: 40
+  See [the FIBAR paper](https://arxiv.org/abs/2510.20071). Default: 40
+- ``use_spatial_filter``: whether to use spatial filtering ([FIBAR](https://arxiv.org/abs/2510.20071)). Default: ``true``.
 - ``statistics_period``: Time period in seconds between statistics printouts. Default: 5.
 - ``event_queue_memory_limit``: How many bytes of event data to keep in the incoming queue before dropping data. Default: 10MB.
+- ``ros_event_queue_size``: Number of event packet messages to keep in the ROS receive queue. Default: 1000.
 - ``edge``: Whether to use the ``up`` or ``down`` edge of the hardware trigger signal. Default: ``up``.
 - ``frame_path``: output directory for reconstructed frames and frame-based camera images. Set to empty string to suppress frame writing. Default: ``""``.
 - ``publish_time_reference``: whether to publish time reference message. Default: ``false``.
@@ -97,7 +101,7 @@ Supported synchronization modes:
 
 Publishers:
 
-- ``~/image_raw``: the reconstructed image frame
+- ``~/image``: the reconstructed image frame
 
 Subscribers:
 
@@ -113,10 +117,11 @@ from it. Here are several usage examples.
 1) Free-running mode. This means there is no synchronization, and the produced frames will be at a fixed
    frame rate, equidistant in sensor time (not ROS or system time).
 2) Software synchronized with external camera. The reconstruction node subscribes to a camera topic. When an image frame
-   arrives, it translates the ROS header time stamp of image message to sensor time using its internally
+   arrives, it translates the ROS header time stamp of the image message to sensor time using its internally
    estimated offset between sensor time and ROS time. This sensor time is then used for image reconstruction.
 3) Hardware synchronized with external trigger (currently Metavision-based cameras only).
-   This requires a trigger-in hardware sync pulse be sent to the event camera whenever a frame-based camera frame is triggered. The reconstruction node will use the trigger event's sensor time to reconstruct the intensity image,
+   This requires a trigger-in hardware sync pulse to be sent to the event camera whenever a frame-based camera frame is triggered.
+   The reconstruction node will use the trigger event's sensor time to reconstruct the intensity image,
    then translate the trigger time to ROS time to look up the corresponding header stamp of the frame-based camera image
    that likely corresponds to this trigger event. This header stamp will be used for the published reconstructed image.
 4) Stereo camera, with time synchronization cable between two event cameras, but no external trigger signal connected.
@@ -127,7 +132,9 @@ from it. Here are several usage examples.
    but it uses the sensor time stamps from its own external trigger messages.
 
 The topics in the below example must be adjusted to work for the specific setup.
-As for any ROS-based project, check that the topics are connected correctly by using ``ros2 node list``, ``ros2 node info`` and ``ros2 topic list``. Also bear in mind that the FIBAR node operates with lazy subscribe. In order for it to do anything, you *must subscribe to the reconstructed image* (rqt_gui is good tool for that)
+As for any ROS-based project, check that the topics are connected correctly by using ``ros2 node list``, ``ros2 node info`` and ``ros2 topic list``.
+Also bear in mind that the FIBAR node operates with lazy subscribe.
+In order for it to do anything, you *must subscribe to the reconstructed image* (rqt\_gui is good tool for that)
 
 In all the below cases ``use_sim_time`` is set to ``true`` because it is assumed that the data is played back from a rosbag that drives the clock:
 
@@ -135,63 +142,103 @@ In all the below cases ``use_sim_time`` is set to ``true`` because it is assumed
 ros2 bag play --clock-topics-all my_bag_with_data
 ```
 
-Example launch for case 1: free-running (unsynchronized) mode:
+Example launch for case 1: free-running (unsynchronized) mode, writing frames, with data played back from rosbag:
 
 ```bash
-ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 fps:=25 frame_path:=./frames use_sim_time:=true
+ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 fps:=15 use_sim_time:=true
 ```
 
-Example launch for case 2: software synchronized setup. The free running must be explicitly disabled by passing ``fps:=-1``.
+Example launch for case 2: software synchronized with camera frames with data played back from rosbag:
 
 ```bash
-ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw fps:=-1 use_trigger_events:=false frame_path:=./frames use_sim_time:=true
+ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw sync_mode:=camera_image use_sim_time:=true
 ```
 
-Example launch for case 3: hardware-synced setup, triggering on the up edge of the signal. The free running must be explicitly disabled by passing ``fps:=-1``.
+Example launch for case 3: hardware-synced setup, triggering on the up edge of the signal.
 
 ```bash
-ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw fps:=-1 use_trigger_events:=true edge:=up frame_path:=./frames use_sim_time:=true
+ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw sync_mode:=camera_image use_trigger_events:=true trigger_edge:=up use_sim_time:=true
 ```
 
-In this hardware synchronized case, the FIBAR node will output statistics showing event rate, frame-based camera rate, and trigger event rate. The frame-based camera rate and trigger rate must be very close for the frame-to-trigger association to work. The last column gives the estimated time delay of the frame-based camera image with respect to the event camera trigger pulse.
+In this hardware synchronized case, the FIBAR node will output statistics showing event rate, frame-based camera rate, and trigger event rate. The frame-based camera rate and trigger rate must be very close for the frame-to-trigger association to work. The last column gives the estimated time delay of the trigger event with respect to the frame-based camera image. In this (unusual) example the delay is positive, meaning the camera frame time stamp is *earlier* than the event trigger time.
 
 ```text
-[INFO] [1762533207.007511785] [event_cam_0.fibar]:   7.49 Mevs, frame:  39.36(est:  38.13)Hz trig:  39.36(est:  38.10)Hz delay: -3.242 ms
-[INFO] [1762533211.999424224] [event_cam_0.fibar]:   7.28 Mevs, frame:  38.06(est:  38.35)Hz trig:  38.06(est:  38.10)Hz delay: -3.060 ms
-[INFO] [1762533217.007415855] [event_cam_0.fibar]:   7.54 Mevs, frame:  38.14(est:  38.22)Hz trig:  37.94(est:  38.10)Hz delay: -3.057 ms
+[INFO] [1764937150.578530550] [event_cam_0.fibar]:   7.27(  7.27) Mevs, lag:  0.0000s frm:  37.99( 38.35)Hz trig:  37.99( 38.10)Hz del:  3.060ms
+[INFO] [1764937155.578969871] [event_cam_0.fibar]:   7.55(  7.55) Mevs, lag:  0.0000s frm:  38.20( 38.22)Hz trig:  38.20( 38.09)Hz del:  3.061ms
 ```
 
-Example launch for case 4: two event cameras connected with sync cable, but no external trigger pulse connected. Node 0 publishes time reference
-messages for node 1.
+Example launch for case 4: two event cameras connected with sync cable, but no external trigger pulse connected. Node 0 publishes time reference messages for node 1.
 
 ```bash
- ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=free_running cam_0_publish_time_reference:=True cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=time_reference cam_1_time_reference:=/event_cam_0/fibar/time_reference
+ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=free_running cam_0_publish_time_reference:=true cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=time_reference cam_1_time_reference:=/event_cam_0/fibar/time_reference
  ```
 
 The output shows that both cameras do not use trigger events:
 
 ```text
-[INFO] [1764094089.499803241] [event_cam_0.fibar]:   7.14 Mevs, frame:  24.79(est:  25.00)Hz trig:   0.00(est:  -1.00)Hz delay:  0.000 ms
-[INFO] [1764094089.510052006] [event_cam_1.fibar]:   6.75 Mevs, frame:  24.78(est:  25.00)Hz trig:   0.00(est:  -1.00)Hz delay:  0.000 ms
+[INFO] [1764937423.207856455] [event_cam_1.fibar]:   7.14(  7.14) Mevs, lag:  0.0000s frm:  25.00( 25.00)Hz trig:   0.00( -1.00)Hz del:  0.000ms
+[INFO] [1764937423.207871754] [event_cam_0.fibar]:   7.53(  7.53) Mevs, lag:  0.0000s frm:  25.00( 25.00)Hz trig:   0.00( -1.00)Hz del:  0.000ms
 ```
 
 Example launch for case 5: two hardware-synced event cameras, with node 1 publishing the trigger event messages for node 0.
 
 ```bash
-ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=time_reference cam_0_time_reference:=/event_cam_1/fibar/time_reference  cam_0_use_trigger_events:=True cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=trigger_events cam_1_publish_time_reference:=True cam_1_use_trigger_events:=True
+ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=time_reference cam_0_time_reference:=/event_cam_1/fibar/time_reference  cam_0_use_trigger_events:=True cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=trigger_events cam_1_publish_time_reference:=true cam_1_use_trigger_events:=true
 ```
 
 You can see that node 0 is using external frames (time reference messages from node 1) whereas node 1 is using just trigger events.
 
 ```text
-[INFO] [1764089490.868591332] [event_cam_0.fibar]:   7.51 Mevs, frame:  38.00(est:  38.09)Hz trig:  38.00(est:  38.10)Hz delay:  0.002 ms
-[INFO] [1764089490.875018544] [event_cam_1.fibar]:   7.17 Mevs, frame:   0.00(est:  -1.00)Hz trig:  38.18(est:  38.09)Hz delay:  0.000 ms
+[INFO] [1764937792.076139431] [event_cam_0.fibar]:   7.49(  7.49) Mevs, lag:  0.0000s frm:  38.00( 38.09)Hz trig:  38.00( 38.09)Hz del: -0.009ms
+[INFO] [1764937791.681211276] [event_cam_1.fibar]:   7.17(  7.17) Mevs, lag:  0.0000s frm:   0.00( -1.00)Hz trig:  38.00( 38.09)Hz del:  0.000ms
 ```
 
+### output
 
-## Todo
+The meaning of the node's console log is best explained with an example:
 
-There is also tool (``bag_to_frames``) for reconstruction of frames from bags with events but alas, it has not been documented yet.
+```text
+[INFO] [1764975202.192530985] [event_cam_0.fibar]:   7.58(  7.58) Mevs, lag:  0.0038s frm:  38.18( 38.10)Hz trig:  38.18( 38.10)Hz del: -0.010ms
+```
+
+The first two numbers are the event rate in million events per second (Mevs).
+The first number is computed using ROS\_TIME, meaning when running with ``use_sim_time=true``, it does not reflect compute performance. In contrast, the number in parentheses is estimated using wall clock time.
+
+The ``lag`` is the difference between the wall clock time when the frame was actually published, and when it was initiated, i.e. when it was due. A positive lag means the frame was emitted *after* it was initiated. A positive lag is not guaranteed to be positive when running with ``use_sim_time`` because when trigger events are used, the frame initiation time (calculated from a trigger event sensor time and then converted to host time) may have advanced past the current ROS\_TIME, which is driven by the rosbag player that has not advanced past the current event packet message yet.
+
+The ``frm`` fields are the frame rate of frame generating source (camera images, time reference messages, or free running timer). In parentheses is given the exponential moving average frame rate used for lining up trigger events and frames.
+
+The ``trig`` fields are again raw and exponentially averaged rates, but this time for trigger events embedded in the event stream. The trigger event rates must match
+the frame event rates in order to associate trigger events with frames.
+
+Finally, ``delay`` captures the delay between the trigger event and the frame it has been matched with.
+A negative delay (the usual scenario) means that the trigger event occured *before* the frame was initiated (by e.g. a camera).
+
+## Tools
+
+### performance\_test
+
+A simple program to measure the reconstruction speed when reading events from a rosbag. Options are the input bag ("-i"), the event topic ("-t") and the
+reconstruction frame rate ("-f"). You can also switch off the spatial filtering with ("-n"). Example run:
+
+```bash
+ros2 run event_image_reconstruction_fibar performance_test -i ./hand_wave -t /event_camera/events -f 10.0 -n
+```
+
+### bag\_to\_frames
+
+This program was written for performance benchmarking and off-line processing. It cannot handle as many scenarios as the ``fibar`` node, but it has a couple
+other useful features. Synopsis:
+
+```bash
+ros2 run event_image_reconstruction_fibar bag_to_frames -i input_bag -o output_bag -t event_camera_input_topic [-T event_frame_output_topic] [-s (if free running + ev cams are hw synced)] [-x time_stamp_file] [-p (write png files)] [-c frame_camera_input_topic] [-f fps] [-r fill_ratio] [-S tile_size] [-y scale_file] [-C cutoff_period]
+```
+
+Most parameters are similar to the ones of the ``fibar`` node, but the extra ones are:
+
+- ``scale_file``: You can feed in a file with scaling factor (but you need to recompile fibar_lib for that to work!) that will rescale each pixel's intensity amplitude.
+  This was used to investigate the benefits of per-pixel threshold calibration (see the FIBAR paper).
+- ``time_stamp_file``: Feed in a file with sensor (and ROS) time stamps for which the reconstructed frames should be read out. This is useful when comparing to frames reconstructed with e.g. FireNet.
 
 ## License
 
