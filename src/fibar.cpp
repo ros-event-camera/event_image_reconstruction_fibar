@@ -138,7 +138,11 @@ void Fibar::activate()
 #else
     this,
 #endif
+#ifdef IMAGE_TRANSPORT_USE_PUB_OPTIONS
     "~/image", qosProf, pub_options);
+#else
+    "~/image", qosProf);
+#endif
   if (publish_time_reference_) {
     RCLCPP_INFO_STREAM(
       get_logger(), "publishing time reference on topic "
@@ -185,10 +189,12 @@ void Fibar::deconfigure()
   time_reference_pub_.reset();
 }
 
+#ifdef USE_MATCHED_EVENTS
 void Fibar::subscriberChangedCallback(rclcpp::MatchedInfo &)
 {
   checkSubscriptions();
 }
+#endif
 
 void Fibar::subscriptionCheckTimerExpired() { checkSubscriptions(); }
 
