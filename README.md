@@ -142,19 +142,34 @@ In all the below cases ``use_sim_time`` is set to ``true`` because it is assumed
 ros2 bag play --clock-topics-all my_bag_with_data
 ```
 
-Example launch for case 1: free-running (unsynchronized) mode, writing frames, with data played back from rosbag:
+The launch files used in the examples below assume a certain convention for the event topic naming. Your rosbag should have
+the topics named like this (or else you have to hack the launch files):
+
+```text
+Topic information: Topic: /event_cam_0/camera/events | Type: event_camera_msgs/msg/EventPacket
+                   Topic: /event_cam_1/camera/events | Type: event_camera_msgs/msg/EventPacket
+
+```
+
+### Example launch for case 1
+
+Free-running (unsynchronized) mode, writing frames, with data played back from rosbag:
 
 ```bash
 ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 fps:=15 use_sim_time:=true
 ```
 
-Example launch for case 2: software synchronized with camera frames with data played back from rosbag:
+### Example launch for case 2
+
+Software synchronized with camera frames with data played back from rosbag:
 
 ```bash
 ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw sync_mode:=camera_image use_sim_time:=true
 ```
 
-Example launch for case 3: hardware-synced setup, triggering on the up edge of the signal.
+### Example launch for case 3
+
+Hardware-synced setup, triggering on the up edge of the signal.
 
 ```bash
 ros2 launch event_image_reconstruction_fibar fibar.launch.py camera_name:=event_cam_0 frame_image:=/cam_sync/cam0/image_raw sync_mode:=camera_image use_trigger_events:=true trigger_edge:=up use_sim_time:=true
@@ -167,7 +182,9 @@ In this hardware synchronized case, the FIBAR node will output statistics showin
 [INFO] [1764937155.578969871] [event_cam_0.fibar]:   7.55(  7.55) Mevs, lag:  0.0000s frm:  38.20( 38.22)Hz trig:  38.20( 38.09)Hz del:  3.061ms
 ```
 
-Example launch for case 4: two event cameras connected with sync cable, but no external trigger pulse connected. Node 0 publishes time reference messages for node 1.
+### Example launch for case 4
+
+Two event cameras connected with sync cable, but no external trigger pulse connected. Free-running node 0 publishes time reference messages for node 1.
 
 ```bash
 ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=free_running cam_0_publish_time_reference:=true cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=time_reference cam_1_time_reference:=/event_cam_0/fibar/time_reference
@@ -180,7 +197,9 @@ The output shows that both cameras do not use trigger events:
 [INFO] [1764937423.207871754] [event_cam_0.fibar]:   7.53(  7.53) Mevs, lag:  0.0000s frm:  25.00( 25.00)Hz trig:   0.00( -1.00)Hz del:  0.000ms
 ```
 
-Example launch for case 5: two hardware-synced event cameras, with node 1 publishing the trigger event messages for node 0.
+### Example launch for case 5
+
+Two hardware-synced event cameras, with node 1 publishing the trigger event messages for node 0.
 
 ```bash
 ros2 launch event_image_reconstruction_fibar fibar_stereo.launch.py use_sim_time:=true cam_0_camera_name:=event_cam_0  cam_0_sync_mode:=time_reference cam_0_time_reference:=/event_cam_1/fibar/time_reference  cam_0_use_trigger_events:=True cam_1_camera_name:=event_cam_1 cam_1_sync_mode:=trigger_events cam_1_publish_time_reference:=true cam_1_use_trigger_events:=true
@@ -193,7 +212,7 @@ You can see that node 0 is using external frames (time reference messages from n
 [INFO] [1764937791.681211276] [event_cam_1.fibar]:   7.17(  7.17) Mevs, lag:  0.0000s frm:   0.00( -1.00)Hz trig:  38.00( 38.09)Hz del:  0.000ms
 ```
 
-### output
+### Output
 
 The meaning of the node's console log is best explained with an example:
 
@@ -201,8 +220,8 @@ The meaning of the node's console log is best explained with an example:
 [INFO] [1764975202.192530985] [event_cam_0.fibar]:   7.58(  7.58) Mevs, lag:  0.0038s frm:  38.18( 38.10)Hz trig:  38.18( 38.10)Hz del: -0.010ms
 ```
 
-The first two numbers are the event rate in million events per second (Mevs).
-The first number is computed using ROS\_TIME, meaning when running with ``use_sim_time=true``, it does not reflect compute performance. In contrast, the number in parentheses is estimated using wall clock time.
+The first number is the event rate in million events per second (Mevs), as computed using ROS\_TIME, followed in parentheses by the event rate computed
+using wall clock time. When running with ``use_sim_time=true``, only the number in parentheses reflects compute performance!
 
 The ``lag`` is the difference between the wall clock time when the frame was actually published, and when it was initiated, i.e. when it was due. A positive lag means the frame was emitted *after* it was initiated. A positive lag is not guaranteed to be positive when running with ``use_sim_time`` because when trigger events are used, the frame initiation time (calculated from a trigger event sensor time and then converted to host time) may have advanced past the current ROS\_TIME, which is driven by the rosbag player that has not advanced past the current event packet message yet.
 

@@ -22,6 +22,8 @@ from launch.substitutions import LaunchConfiguration as LaunchConfig
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from launch.substitutions import PythonExpression
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import EqualsSubstitution
 
 cam_names = ("cam_0_", "cam_1_")
 
@@ -56,6 +58,28 @@ def launch_setup(context, *args, **kwargs):
         )
         for cam in cam_names
     ]
+    topic_names = [
+        "/" + LaunchConfig(cam + "camera_name").perform(context) + "/fibar/image"
+        for cam in cam_names
+    ]
+    nodes.append(
+        ComposableNode(
+            package="rosbag2_transport",
+            plugin="rosbag2_transport::Recorder",
+            name="recorder",
+            parameters=[
+                {
+                    "record.topics": topic_names,
+                    "record.start_paused": False,
+                    "storage.uri": LaunchConfig("output_bag"),
+                }
+            ],
+            extra_arguments=[{"use_intra_process_comms": True}],
+            condition=UnlessCondition(
+                EqualsSubstitution(LaunchConfig("output_bag"), "")
+            ),
+        ),
+    )
 
     container = ComposableNodeContainer(
         name="fibar_container",
@@ -100,6 +124,9 @@ def generate_launch_description():
     sim_time_arg = LaunchArg(
         "use_sim_time", default_value="False", description="use_sim_time"
     )
+    bag_arg = LaunchArg(
+        "output_bag", default_value="", description="name of output bag (or empty)"
+    )
     per_cam_args = [
         LaunchArg(cam + p[0], default_value=p[1], description=p[2])
         for p in params
@@ -107,5 +134,5 @@ def generate_launch_description():
     ]
 
     return launch.LaunchDescription(
-        [sim_time_arg] + per_cam_args + [OpaqueFunction(function=launch_setup)]
+        [sim_time_arg, bag_arg] + per_cam_args + [OpaqueFunction(function=launch_setup)]
     )
