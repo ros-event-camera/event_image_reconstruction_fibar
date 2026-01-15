@@ -2,6 +2,11 @@
 Changelog for package event_image_reconstruction_fibar
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* fixed missing package depedencies
+* Contributors: Bernd Pfrommer
+
 3.0.1 (2026-01-15)
 ------------------
 * added output_bag option to launch script
