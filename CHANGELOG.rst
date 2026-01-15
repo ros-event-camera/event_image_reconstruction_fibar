@@ -2,8 +2,8 @@
 Changelog for package event_image_reconstruction_fibar
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+3.0.2 (2026-01-15)
+------------------
 * fixed missing package depedencies
 * Contributors: Bernd Pfrommer
 
