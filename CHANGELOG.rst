@@ -2,8 +2,8 @@
 Changelog for package event_image_reconstruction_fibar
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+3.0.4 (2026-04-07)
+------------------
 * remove vcs repos: all in rosdistro now
 * removed include of rosbag2 typesupport_helpers.hpp
 * Contributors: Bernd Pfrommer
