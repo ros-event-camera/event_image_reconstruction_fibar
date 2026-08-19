@@ -217,7 +217,7 @@ private:
     nullptr};
   event_camera_codecs::DecoderFactory<EventPacket, ApproxReconstructor>
     decoder_factory_;
-  fibar_lib::ImageReconstructor<tile_size> reconstructor_;
+  fibar_lib::ImageReconstructor<true, tile_size> reconstructor_;
   std::queue<FrameTime> frame_times_;
   std::queue<EventPacketConstSharedPtrT> buffered_messages_;
   uint64_t decode_time_{0};
